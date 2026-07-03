@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KrowdQuiz - Free Live Trivia</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        :root {
+            --red: #e21b3c; --blue: #1368ce; --green: #26890c; --yellow: #d89e00; --purple: #46178f;
+        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: #f2f2f2; text-align: center; }
+        .screen { display: none; padding: 20px; max-width: 800px; margin: 0 auto; }
+        .active { display: block; }
+        h1 { color: var(--purple); }
+        button { background: var(--blue); color: white; border: none; padding: 12px 24px; font-size: 18px; border-radius: 4px; cursor: pointer; margin: 10px; }
+        button:hover { opacity: 0.9; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
+        .ans-btn { padding: 30px; font-size: 22px; font-weight: bold; color: white; border-radius: 8px; }
+        .btn-0 { background: var(--red); } .btn-1 { background: var(--blue); }
+        .btn-2 { background: var(--yellow); } .btn-3 { background: var(--green); }
+        input { padding: 10px; font-size: 16px; width: 80%; max-width: 300px; margin: 10px; border: 2px solid #ccc; border-radius: 4px; }
+        .player-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 20px; }
+        .player-card { background: white; padding: 10px 20px; border-radius: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <!-- SCREEN 1: LANDING -->
+    <div id="landingScreen" class="screen active">
+        <h1>QMS Qahoot</h1>
+        <button onclick="initHost()">Host a Game</button>
+        <br><br>
+        <hr>
+        <br>
+        <input type="text" id="joinPin" placeholder="Enter Game PIN">
+        <input type="text" id="playerName" placeholder="Enter Nickname"><br>
+        <button onclick="joinGame()">Join Game</button>
+    </div>
+
+    <!-- SCREEN 2: HOST LOBBY -->
+    <div id="hostLobby" class="screen">
+        <h1>Game PIN: <span id="lobbyPin" style="color:var(--red)">00000</span></h1>
+        <h3>Players Joined (<span id="playerCount">0</span>/40):</h3>
+        <div id="lobbyPlayers" class="player-list"></div>
+        <br>
+        <button onclick="startGame()">Start Game</button>
+    </div>
+
+    <!-- SCREEN 3: HOST GAMEPLAY -->
+    <div id="hostGameplay" class="screen">
+        <h2 id="hostQuestion">Question Label</h2>
+        <div id="hostTimer" style="font-size: 32px; font-weight: bold; color: var(--red)">20</div>
+        <h3>Answers received: <span id="answerCount">0</span></h3>
+    </div>
+
+    <!-- SCREEN 4: PLAYER CONTROLS -->
+    <div id="playerGameplay" class="screen">
+        <h3 id="playerStatus">Look at the Host screen for the question!</h3>
+        <div class="grid">
+            <button class="ans-btn btn-0" onclick="submitAnswer(0)">▲</button>
+            <button class="ans-btn btn-1" onclick="submitAnswer(1)">⬢</button>
+            <button class="ans-btn btn-2" onclick="submitAnswer(2)">■</button>
+            <button class="ans-btn btn-3" onclick="submitAnswer(3)">●</button>
+        </div>
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const firebaseConfig = { databaseURL: "https://console.firebase.google.com/project/qms-qahoot/database/qms-qahoot-default-rtdb/data/~2F" };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // --- SAMPLE QUIZ DATA ---
+        const quizData = [
+            { q: "What is the capital of France?", options: ["London", "Paris", "Berlin", "Rome"], correct: 1 },
+            { q: "Which planet is known as the Red Planet?", options: ["Earth", "Mars", "Jupiter", "Venus"], correct: 1 }
+        ];
+
+        let gamePin, myName, currentQIndex = 0;
+
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+        }
+
+        // --- HOST LOGIC ---
+        function initHost() {
+            gamePin = Math.floor(10000 + Math.random() * 90000).toString();
+            document.getElementById('lobbyPin').innerText = gamePin;
+            showScreen('hostLobby');
+
+            db.ref(`games/${gamePin}`).set({ status: "lobby", currentQuestion: 0 });
+            
+            db.ref(`games/${gamePin}/players`).on('value', snapshot => {
+                const players = snapshot.val() || {};
+                const listDiv = document.getElementById('lobbyPlayers');
+                listDiv.innerHTML = '';
+                const pKeys = Object.keys(players);
+                document.getElementById('playerCount').innerText = pKeys.length;
+                pKeys.forEach(k => {
+                    listDiv.innerHTML += `<div class="player-card">${players[k].name}</div>`;
+                });
+            });
+        }
+
+        function startGame() {
+            db.ref(`games/${gamePin}`).update({ status: "playing" });
+            runHostQuestion();
+        }
+
+        function runHostQuestion() {
+            showScreen('hostGameplay');
+            const q = quizData[currentQIndex];
+            document.getElementById('hostQuestion').innerText = q.q;
+            db.ref(`games/${gamePin}`).update({ currentQuestion: currentQIndex, resetAnswers: Date.now() });
+
+            let timeLeft = 20;
+            const timerElement = document.getElementById('hostTimer');
+            
+            // Listen to answer tallies
+            db.ref(`games/${gamePin}/answers`).on('value', snapshot => {
+                const ans = snapshot.val() || {};
+                document.getElementById('answerCount').innerText = Object.keys(ans).length;
+            });
+
+            const countdown = setInterval(() => {
+                timeLeft--;
+                timerElement.innerText = timeLeft;
+                if (timeLeft <= 0) {
+                    clearInterval(countdown);
+                    db.ref(`games/${gamePin}/answers`).off();
+                    alert(`Time's up! The correct answer was: ${q.options[q.correct]}`);
+                    // Handle shifting to next question or ending game here
+                }
+            }, 1000);
+        }
+
+        // --- PLAYER LOGIC ---
+        function joinGame() {
+            gamePin = document.getElementById('joinPin').value.trim();
+            myName = document.getElementById('playerName').value.trim();
+            if(!gamePin || !myName) return alert("Fill in Pin and Nickname");
+
+            db.ref(`games/${gamePin}`).once('value', snapshot => {
+                if(!snapshot.exists()) return alert("Game not found!");
+                
+                // Register player
+                db.ref(`games/${gamePin}/players/${myName}`).set({ name: myName, score: 0 });
+                showScreen('playerGameplay');
+                document.getElementById('playerStatus').innerText = "Waiting for host to start...";
+
+                // Listen for game state updates from host
+                db.ref(`games/${gamePin}`).on('value', snap => {
+                    const data = snap.val();
+                    if(data.status === "playing") {
+                        document.getElementById('playerStatus').innerText = `Question ${data.currentQuestion + 1}: Select your shape!`;
+                    }
+                });
+            });
+        }
+
+        function submitAnswer(index) {
+            db.ref(`games/${gamePin}/answers/${myName}`).set({ answer: index });
+            document.getElementById('playerStatus').innerText = "Answer submitted! Watch the board.";
+        }
+    </script>
+</body>
+</html>
